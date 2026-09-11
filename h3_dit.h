@@ -108,12 +108,21 @@ int h3_dit_denoise_euler(h3_dit *dit, float *video_latent,
                          h3_dit_progress progress, void *progress_opaque,
                          char *error, size_t error_size);
 
-/* Preview variant. The callback runs after every Euler transition with the
- * current channel-major F32 video latent. It is deliberately opt-in because it
- * introduces a synchronization point after each step. */
+/* Preview variant. The callback runs after every Euler transition with a
+ * channel-major F32 video latent. It is deliberately opt-in because it
+ * introduces a synchronization point after each step.
+ *
+ * preview_mode selects what that latent represents: H3_PREVIEW_RAW passes
+ * the raw noisy Euler sample x_t (looks like unstructured noise until late
+ * in the schedule); H3_PREVIEW_ESTIMATE instead reconstructs the estimated
+ * clean sample x0 = x_t + sigma_t * v from the same step's velocity, which
+ * trends toward the final image earlier. Either way, the actual sampling
+ * trajectory (video_latent/audio_latent on return) is unaffected — this only
+ * changes what gets shown to the preview callback. */
 int h3_dit_denoise_euler_preview(
                          h3_dit *dit, float *video_latent,
                          float *audio_latent, int reuse_interval,
+                         int preview_mode,
                          h3_dit_progress progress, void *progress_opaque,
                          h3_dit_preview preview, void *preview_opaque,
                          char *error, size_t error_size);
