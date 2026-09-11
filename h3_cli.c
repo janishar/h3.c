@@ -134,8 +134,9 @@ static int cli_frame(const h3_frame *frame, void *opaque) {
         state->progress_active = 0;
     }
     if (frame->denoise_step >= 0)
-        fprintf(stderr, "h3: preview %d/%d\n", frame->denoise_step + 1,
-                frame->denoise_steps);
+        fprintf(stderr, "h3: preview %d/%d, frame %d/%d\n",
+                frame->denoise_step + 1, frame->denoise_steps,
+                frame->frame_index + 1, frame->frame_count);
     char error[256];
     if (!h3_terminal_display_rgb24(state->terminal, frame->rgb,
                                    frame->width, frame->height, frame->stride,

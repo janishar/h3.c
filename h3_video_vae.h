@@ -32,6 +32,12 @@ int h3_video_vae_decoder_preview(h3_video_vae_decoder *decoder,
                         const float *normalized_latent, int latent_time,
                         h3_video_frames *output, int *output_frame_index,
                         char *error, size_t error_size);
+// Decode N frames from the middle chunk of the given latent.
+int h3_video_vae_decoder_decode_range(h3_video_vae_decoder *decoder,
+                        const float *normalized_latent, int latent_time,
+                        int frame_count,
+                        h3_video_frames *output, int *output_frame_index,
+                        char *error, size_t error_size);
 int h3_video_vae_decoder_decode(h3_video_vae_decoder *decoder,
                         const float *normalized_latent, int latent_time,
                         h3_video_frames *output,

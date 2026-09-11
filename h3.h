@@ -123,6 +123,9 @@ typedef struct {
     int use_slower_grouped_quantizer;
     /* Decode and deliver one representative frame after every Euler step. */
     int preview_denoise;
+    /* Number of frames to decode from the middle chunk per denoising step (1 =
+     * middle frame only, >1 = N consecutive frames, default 1). */
+    int preview_frame_count;
     h3_frame_callback on_frame;
     h3_progress_callback on_progress;
     void *callback_opaque;
@@ -131,7 +134,7 @@ typedef struct {
 #define H3_PARAMS_DEFAULT { \
     H3_DEFAULT_WIDTH, H3_DEFAULT_HEIGHT, H3_DEFAULT_FRAMES, H3_DEFAULT_STEPS, \
     UINT64_C(42), NULL, NULL, NULL, NULL, 0, H3_REFERENCE_IMAGE_MATCH, \
-    1, H3_DEFAULT_DIT_LAYERS, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL \
+    1, H3_DEFAULT_DIT_LAYERS, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL \
 }
 
 typedef struct {

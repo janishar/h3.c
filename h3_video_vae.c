@@ -888,6 +888,67 @@ static int decoder_decode_chunk(h3_video_vae_decoder *decoder,
     return ok;
 }
 
+// Like decoder_decode_chunk but decodes a range of consecutive frames from a
+// chunk, given an offset and count instead of a single selected_frame.
+static int decoder_decode_chunk_range(h3_video_vae_decoder *decoder,
+                                      const float *normalized_latent,
+                                      int latent_time, int chunk,
+                                      int frame_offset, int frame_count,
+                                      h3_video_frames *output,
+                                      char *error, size_t error_size) {
+    if (output) memset(output, 0, sizeof(*output));
+    if (error && error_size) error[0] = '\0';
+    if (!decoder || !normalized_latent || !output || latent_time < 7 ||
+        chunk < 0 || chunk > (latent_time - CHUNK_LATENT_TIME) / 5 ||
+        frame_offset < 0 || frame_count < 1 ||
+        frame_offset + frame_count > FIRST_CHUNK_FRAMES) {
+        fail(error, error_size, "invalid resident video VAE chunk range arguments");
+        return 0;
+    }
+    int tile_count = decoder->y_axis.count * decoder->x_axis.count;
+    float **tiles = calloc((size_t)tile_count, sizeof(*tiles));
+    if (!tiles) {
+        fail(error, error_size, "out of memory retaining video VAE tiles");
+        return 0;
+    }
+    int ok = 1;
+    for (int tile_y = 0; tile_y < decoder->y_axis.count && ok; tile_y++)
+        for (int tile_x = 0; tile_x < decoder->x_axis.count && ok; tile_x++) {
+            float *input = extract_latent_tile(
+                normalized_latent, latent_time, decoder->latent_h,
+                decoder->latent_w, chunk * 5,
+                decoder->y_axis.starts[tile_y] / SPATIAL_RATIO,
+                decoder->x_axis.starts[tile_x] / SPATIAL_RATIO,
+                CHUNK_LATENT_TIME, decoder->vae.latent_h,
+                decoder->vae.latent_w, error, error_size);
+            if (!input) {
+                ok = 0;
+                break;
+            }
+            free_tensor(&decoder->vae.latent);
+            ok = prepare_input(&decoder->vae, input,
+                               decoder->latent_mean, decoder->latent_std,
+                               error, error_size) &&
+                 run_resident_tile(&decoder->vae, error, error_size);
+            free(input);
+            if (!ok) break;
+            h3_video_frames tile;
+            memset(&tile, 0, sizeof(tile));
+            ok = unpack_frame_range(&decoder->vae, frame_offset,
+                                    frame_count, &tile, error, error_size);
+            if (ok) {
+                int index = tile_y * decoder->x_axis.count + tile_x;
+                tiles[index] = tile.rgb;
+            }
+        }
+    if (ok) ok = stitch_tiles(tiles, &decoder->y_axis, &decoder->x_axis,
+                              frame_count, output, error, error_size);
+    for (int index = 0; index < tile_count; index++) free(tiles[index]);
+    free(tiles);
+    if (!ok) h3_video_frames_free(output);
+    return ok;
+}
+
 h3_video_vae_decoder *h3_video_vae_decoder_load(
                         const char *weight_directory,
                         const char *shader_source_path,
@@ -971,6 +1032,37 @@ int h3_video_vae_decoder_preview(h3_video_vae_decoder *decoder,
                                   chunk, local_frame, output,
                                   error, error_size);
     if (ok) *output_frame_index = global_frame;
+    return ok;
+}
+
+// Decode N frames from the middle chunk of the given latent.
+int h3_video_vae_decoder_decode_range(h3_video_vae_decoder *decoder,
+        const float *normalized_latent, int latent_time,
+        int frame_count,
+        h3_video_frames *output, int *output_frame_index,
+        char *error, size_t error_size) {
+    if (output) memset(output, 0, sizeof(*output));
+    if (error && error_size) error[0] = '\0';
+    if (!decoder || !normalized_latent || !output || !output_frame_index ||
+        latent_time < CHUNK_LATENT_TIME || (latent_time - 2) % 5 ||
+        frame_count < 1) {
+        fail(error, error_size, "invalid video VAE decode range arguments");
+        return 0;
+    }
+    int chunks = (latent_time - 2) / 5;
+    int chunk = chunks / 2;                           // middle chunk
+    int local_start = FIRST_CHUNK_FRAMES / 2;         // middle frame as offset
+    int output_frames = chunks * 17 + 5;
+    int global_start = chunk * 17 + local_start;
+    if (global_start + frame_count > output_frames)
+        frame_count = output_frames - global_start;   // clamp to video length
+    if (local_start + frame_count > FIRST_CHUNK_FRAMES)
+        frame_count = FIRST_CHUNK_FRAMES - local_start; // clamp to chunk bounds
+
+    int ok = decoder_decode_chunk_range(
+        decoder, normalized_latent, latent_time,
+        chunk, local_start, frame_count, output, error, error_size);
+    if (ok) *output_frame_index = global_start;
     return ok;
 }
 
