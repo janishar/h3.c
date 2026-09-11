@@ -1683,7 +1683,7 @@ h3_result *h3_generate(h3_ctx *ctx, const char *prompt,
         range_preview.output_height = params->height;
         range_preview.frame_count = params->preview_frame_count;
         denoise_ok = h3_dit_denoise_euler_preview(
-            dit, video, audio, params->denoise_reuse,
+            dit, video, audio, params->denoise_reuse, params->preview_mode,
             h3_dit_progress_bridge, &progress,
             h3_deliver_denoise_preview_range, &range_preview,
             detail, sizeof(detail));
@@ -1702,7 +1702,7 @@ h3_result *h3_generate(h3_ctx *ctx, const char *prompt,
             live_preview.output_height = params->height;
         }
         denoise_ok = h3_dit_denoise_euler_preview(
-            dit, video, audio, params->denoise_reuse,
+            dit, video, audio, params->denoise_reuse, params->preview_mode,
             h3_dit_progress_bridge, &progress,
             preview_decoder ? h3_deliver_denoise_preview : NULL,
             preview_decoder ? &live_preview : NULL,

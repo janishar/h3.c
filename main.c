@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <sys/stat.h>
 
 static void usage(const char *program) {
@@ -59,6 +60,9 @@ static void usage(const char *program) {
         "      --zoom N           Terminal image zoom (default: 2 for Retina)\n"
         "      --preview-frames N Decode N frames from the middle chunk per\n"
         "                         denoising step (default: 1, middle frame only)\n"
+        "      --preview-mode M   Preview reconstruction: raw (default, shows the\n"
+        "                         literal noisy sample) or estimate (reconstructs\n"
+        "                         the estimated clean sample, sharpens earlier)\n"
         "      --profile          Print per-phase Metal timing and allocation data\n"
         "      --info             Inspect model/device without mapping weights\n"
         "  -h, --help             Show this help\n",
@@ -253,7 +257,7 @@ int main(int argc, char **argv) {
            OPT_FIRST, OPT_LAST, OPT_REF_IMAGE, OPT_REF_IMAGE_SIZE,
            OPT_REF_VIDEO, OPT_REF_SILENT_VIDEO, OPT_REF_VIDEO_AUDIO,
            OPT_REF_AUDIO, OPT_FRAMES_DIR, OPT_SHOW, OPT_ZOOM,
-           OPT_PREVIEW_FRAMES,
+           OPT_PREVIEW_FRAMES, OPT_PREVIEW_MODE,
            OPT_PROFILE, OPT_INFO };
     static const struct option options[] = {
         {"model-dir", required_argument, NULL, 'd'},
@@ -306,6 +310,7 @@ int main(int argc, char **argv) {
         {"show", no_argument, NULL, OPT_SHOW},
         {"zoom", required_argument, NULL, OPT_ZOOM},
         {"preview-frames", required_argument, NULL, OPT_PREVIEW_FRAMES},
+        {"preview-mode", required_argument, NULL, OPT_PREVIEW_MODE},
         {"profile", no_argument, NULL, OPT_PROFILE},
         {"info", no_argument, NULL, OPT_INFO},
         {"help", no_argument, NULL, 'h'},
@@ -465,6 +470,17 @@ int main(int argc, char **argv) {
                 break;
             case OPT_PREVIEW_FRAMES:
                 params.preview_frame_count = parse_int(optarg, "preview frames");
+                break;
+            case OPT_PREVIEW_MODE:
+                if (!strcasecmp(optarg, "raw")) {
+                    params.preview_mode = H3_PREVIEW_RAW;
+                } else if (!strcasecmp(optarg, "estimate")) {
+                    params.preview_mode = H3_PREVIEW_ESTIMATE;
+                } else {
+                    fprintf(stderr,
+                            "h3: --preview-mode must be raw or estimate\n");
+                    return 2;
+                }
                 break;
             case OPT_PROFILE: profile = 1; break;
             case OPT_INFO: info = 1; break;

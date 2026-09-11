@@ -171,6 +171,7 @@ static void print_help(void) {
     puts("  !ref-remove N            Remove ordered reference N");
     puts("  !show [on|off]           Toggle denoising previews");
     puts("  !zoom N                  Set terminal image zoom");
+    puts("  !preview-mode [raw|estimate]  Preview: raw sample or estimated clean sample");
     puts("  !open [on|off]           Toggle opening completed videos");
     puts("  !output [DIR]            Set or show the output directory");
     puts("  !save [PATH]             Copy the last generated video");
@@ -643,6 +644,17 @@ static int process_command(h3_cli_state *state, char *line, int *repeat) {
         if (!parse_i32(argument, 1, INT32_MAX, &value) ||
             !h3_terminal_set_zoom(value)) fprintf(stderr, "h3: invalid zoom\n");
         else printf("Zoom: %dx\n", value);
+    } else if (!strcasecmp(command, "preview-mode")) {
+        if (!*argument)
+            printf("Preview mode: %s\n", state->params.preview_mode ==
+                   H3_PREVIEW_ESTIMATE ? "estimate" : "raw");
+        else if (!strcasecmp(argument, "raw")) {
+            state->params.preview_mode = H3_PREVIEW_RAW;
+            puts("Preview mode: raw");
+        } else if (!strcasecmp(argument, "estimate")) {
+            state->params.preview_mode = H3_PREVIEW_ESTIMATE;
+            puts("Preview mode: estimate");
+        } else fprintf(stderr, "h3: use raw or estimate\n");
     } else if (!strcasecmp(command, "open")) {
         int value;
         if (!parse_toggle(argument, state->open_output, &value))
