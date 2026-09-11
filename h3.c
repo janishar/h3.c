@@ -746,6 +746,20 @@ typedef struct {
     int failed;
 } h3_live_preview;
 
+/* Multi-frame preview variant: decodes N frames from the middle chunk per step. */
+typedef struct {
+    h3_generation_progress *progress;
+    h3_video_vae_decoder *decoder;
+    int latent_t;
+    int latent_h;
+    int latent_w;
+    int output_frames;
+    int output_width;
+    int output_height;
+    int frame_count;
+    int failed;
+} h3_live_preview_range;
+
 static int h3_deliver_denoise_preview(int completed_steps, int total_steps,
                                       const float *video_latent,
                                       size_t video_elements, void *opaque) {
@@ -811,6 +825,95 @@ static int h3_deliver_denoise_preview(int completed_steps, int total_steps,
     int cancelled = preview->progress->params->on_frame(
         &frame, preview->progress->params->callback_opaque);
     free(rgb);
+    if (cancelled) {
+        h3_set_error(preview->progress->ctx,
+                     "generation cancelled during denoising preview %d",
+                     completed_steps);
+        preview->failed = 1;
+        return 1;
+    }
+    return 0;
+}
+
+/* Multi-frame variant: decodes N frames from the middle chunk and emits each.
+ * The VAE compute is the same as the single-frame path — unpacking N frames
+ * from the already-decoded output tensor is a CPU-only operation. */
+static int h3_deliver_denoise_preview_range(int completed_steps, int total_steps,
+        const float *video_latent, size_t video_elements, void *opaque) {
+    h3_live_preview_range *preview = opaque;
+    if (!preview || !preview->progress || !preview->decoder || !video_latent) {
+        if (preview && preview->progress)
+            h3_set_error(preview->progress->ctx,
+                         "invalid denoising preview latent");
+        if (preview) preview->failed = 1;
+        return 1;
+    }
+    size_t expected = (size_t)24 * (size_t)preview->latent_t *
+                      (size_t)preview->latent_h * (size_t)preview->latent_w;
+    if (video_elements != expected) {
+        h3_set_error(preview->progress->ctx,
+                     "invalid denoising preview latent size");
+        preview->failed = 1;
+        return 1;
+    }
+    char detail[512];
+    h3_video_frames decoded;
+    memset(&decoded, 0, sizeof(decoded));
+
+    int frame_index = 0;
+    int ok = h3_video_vae_decoder_decode_range(
+        preview->decoder, video_latent, preview->latent_t,
+        preview->frame_count, &decoded, &frame_index, detail, sizeof(detail));
+    if (!ok) {
+        h3_set_error(preview->progress->ctx,
+                     "cannot decode denoising preview: %s", detail);
+        preview->failed = 1;
+        return 1;
+    }
+
+    /* Convert each frame and emit via on_frame callback. */
+    int frame_pixels = decoded.width * decoded.height * 3;
+    int cancelled = 0;
+    for (int fi = 0; fi < decoded.frames && !cancelled; fi++) {
+        const float *frame_rgb = decoded.rgb + (size_t)fi * frame_pixels;
+        uint8_t *rgb = h3_rgb_f32_to_u8(frame_rgb, (size_t)frame_pixels);
+        if (!rgb) {
+            h3_set_error(preview->progress->ctx,
+                         "out of memory converting denoising preview");
+            preview->failed = 1;
+            cancelled = 1;
+            break;
+        }
+
+        int source_width = preview->latent_w * H3_VAE_SPATIAL_RATIO;
+        int source_height = preview->latent_h * H3_VAE_SPATIAL_RATIO;
+        if (source_width != preview->output_width ||
+            source_height != preview->output_height) {
+            uint8_t *resized = NULL;
+            if (!h3_resize_rgb24_high_quality(rgb, 1, source_width, source_height,
+                    preview->output_width, preview->output_height, &resized)) {
+                free(rgb);
+                h3_set_error(preview->progress->ctx,
+                             "cannot resize denoising preview");
+                preview->failed = 1;
+                cancelled = 1;
+                break;
+            }
+            free(rgb);
+            rgb = resized;
+        }
+
+        h3_frame frame = {
+            preview->output_width, preview->output_height,
+            preview->output_width * 3, rgb,
+            frame_index + fi, preview->output_frames,
+            completed_steps - 1, total_steps
+        };
+        cancelled = preview->progress->params->on_frame(
+            &frame, preview->progress->params->callback_opaque);
+        free(rgb);
+    }
+    h3_video_frames_free(&decoded);
     if (cancelled) {
         h3_set_error(preview->progress->ctx,
                      "generation cancelled during denoising preview %d",
@@ -1548,14 +1651,6 @@ h3_result *h3_generate(h3_ctx *ctx, const char *prompt,
             h3_set_error(ctx, "%s", detail);
             goto cleanup;
         }
-        live_preview.progress = &progress;
-        live_preview.decoder = preview_decoder;
-        live_preview.latent_t = temporal.video_t;
-        live_preview.latent_h = latent_h;
-        live_preview.latent_w = latent_w;
-        live_preview.output_frames = temporal.frame_count;
-        live_preview.output_width = params->width;
-        live_preview.output_height = params->height;
         if (progress.cancelled) goto cleanup;
     }
     size_t video_count = h3_dit_video_elements(dit);
@@ -1573,13 +1668,49 @@ h3_result *h3_generate(h3_ctx *ctx, const char *prompt,
     h3_rng_seed(&audio_rng, params->seed);
     h3_rng_fill_normal(&video_rng, video, video_count);
     h3_rng_fill_normal(&audio_rng, audio, audio_count);
-    if (!h3_dit_denoise_euler_preview(
+    int denoise_ok = 1;
+    if (params->preview_denoise && params->preview_frame_count > 1) {
+        /* Multi-frame preview path: decode N frames from middle chunk per step. */
+        h3_live_preview_range range_preview;
+        memset(&range_preview, 0, sizeof(range_preview));
+        range_preview.progress = &progress;
+        range_preview.decoder = preview_decoder;
+        range_preview.latent_t = temporal.video_t;
+        range_preview.latent_h = latent_h;
+        range_preview.latent_w = latent_w;
+        range_preview.output_frames = temporal.frame_count;
+        range_preview.output_width = params->width;
+        range_preview.output_height = params->height;
+        range_preview.frame_count = params->preview_frame_count;
+        denoise_ok = h3_dit_denoise_euler_preview(
+            dit, video, audio, params->denoise_reuse,
+            h3_dit_progress_bridge, &progress,
+            h3_deliver_denoise_preview_range, &range_preview,
+            detail, sizeof(detail));
+        if (range_preview.failed && denoise_ok)
+            h3_set_error(ctx, "%s", detail);
+    } else {
+        /* Single-frame preview path (unchanged). */
+        if (params->preview_denoise) {
+            live_preview.progress = &progress;
+            live_preview.decoder = preview_decoder;
+            live_preview.latent_t = temporal.video_t;
+            live_preview.latent_h = latent_h;
+            live_preview.latent_w = latent_w;
+            live_preview.output_frames = temporal.frame_count;
+            live_preview.output_width = params->width;
+            live_preview.output_height = params->height;
+        }
+        denoise_ok = h3_dit_denoise_euler_preview(
             dit, video, audio, params->denoise_reuse,
             h3_dit_progress_bridge, &progress,
             preview_decoder ? h3_deliver_denoise_preview : NULL,
             preview_decoder ? &live_preview : NULL,
-            detail, sizeof(detail))) {
-        if (!live_preview.failed) h3_set_error(ctx, "%s", detail);
+            detail, sizeof(detail));
+        if (live_preview.failed && denoise_ok)
+            h3_set_error(ctx, "%s", detail);
+    }
+    if (!denoise_ok) {
         if (dit_is_cached) {
             ctx->dit = NULL;
             free(ctx->dit_key);
