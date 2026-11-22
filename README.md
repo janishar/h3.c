@@ -403,6 +403,41 @@ Standalone audio must accompany an image or video reference. Audio references
 must be 2–15 seconds; at most three audio inputs are accepted and their total
 decoded duration is capped at 15 seconds.
 
+## Turbo LoRA
+
+h3 can merge a Diffusers/PEFT MiniMax-H3 LoRA into the DiT weights as it loads
+them (`h3_lora.c`, hooked into `load_tensor` in `h3_weights.c`). It is made for
+lightx2v's 8-step Turbo LoRAs from the Hugging Face repo
+`lightx2v/Minimax-h3-Turbo` at revision `c2bf13b8`:
+
+- `minimax_h3_fl2v_turbo_8step_v1.2_768p_bf16.safetensors` for FL2VA runs
+  (363 modules);
+- `minimax_h3_ref2v_turbo_8step_v1.1_768p_bf16.safetensors` for Ref2VA runs
+  with references (312 modules).
+
+```sh
+H3_LORA=/path/to/minimax_h3_fl2v_turbo_8step_v1.2_768p_bf16.safetensors \
+H3_ZERO_COPY_WEIGHTS=0 \
+./h3 -d MiniMax-H3 -p "..." --steps 8 -o out.mp4
+```
+
+- `H3_LORA`: the `.safetensors` file; unset or empty turns the merge off.
+- `H3_LORA_STRENGTH`: multiplier, default 1.
+- Scale is strength x alpha / rank, where alpha is the module's own `.alpha`
+  tensor, else the file's metadata `alpha`, else the rank.
+- Set `H3_ZERO_COPY_WEIGHTS=0`: merging into memory-mapped shards dirties
+  copy-on-write pages that stay resident. Copied weights cost about 4.5 GB more
+  peak memory.
+- The merge runs on the CPU and takes about 15-19 s per run; h3 prints
+  `h3 lora: merged N modules in S s`. With fewer layers it says
+  `merged N of M modules`, which is not an error. A bad file prints an
+  `h3 lora: ...` line and h3 fails with `cannot merge LoRA into <name>`.
+- Use 8 steps.
+
+The LoRA files are not part of this repository and are under the MiniMax H3
+community licence, like the base weights. The merge code came from
+helmstudio-next and is MIT licensed like the rest of this repository.
+
 ## Tests and runtime requirements
 
 ```sh
